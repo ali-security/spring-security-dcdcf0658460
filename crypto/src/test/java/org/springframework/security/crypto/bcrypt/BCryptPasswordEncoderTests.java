@@ -244,4 +244,18 @@ public class BCryptPasswordEncoderTests {
 		assertThat(encoder.matches(password73chars, encodedPassword73chars)).isTrue();
 	}
 
+	@Test
+	public void upgradeWhenNoRoundsThenTrue() {
+		BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+		assertThat(encoder.upgradeEncoding("$2a$00$9N8N35BVs5TLqGL3pspAte5OWWA2a2aZIs.EGp7At7txYakFERMue")).isTrue();
+	}
+
+	@Test
+	public void checkWhenNoRoundsThenTrue() {
+		BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+		assertThat(encoder.matches("password", "$2a$00$9N8N35BVs5TLqGL3pspAte5OWWA2a2aZIs.EGp7At7txYakFERMue"))
+				.isTrue();
+		assertThat(encoder.matches("wrong", "$2a$00$9N8N35BVs5TLqGL3pspAte5OWWA2a2aZIs.EGp7At7txYakFERMue")).isFalse();
+	}
+
 }
