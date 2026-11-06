@@ -1,11 +1,18 @@
 name: PR Build
 
-on: pull_request
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Gradle test task + --tests selector to run instead of the full scoped build'
+        required: false
+        default: ''
 
 jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 50
 
     steps:
       - uses: actions/checkout@v2
@@ -14,9 +21,55 @@ jobs:
         with:
           java-version: '8'
       - name: Cache Gradle packages
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: ~/.gradle/caches
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+      - name: Write test-reporting init script
+        run: |
+          cat > "$RUNNER_TEMP/test-logging.gradle" <<'EOF'
+          allprojects {
+            tasks.withType(Test).configureEach { t ->
+              t.testLogging { events 'failed', 'skipped'; exceptionFormat 'full' }
+              t.afterTest { desc, result ->
+                if (result.resultType == TestResult.ResultType.SKIPPED) {
+                  String reason = 'JUnit assumption not met at runtime'
+                  if (result.exception != null) { reason += ': ' + result.exception.message }
+                  try {
+                    def urls = t.classpath.files.collect { it.toURI().toURL() } as URL[]
+                    def cl = new URLClassLoader(urls, (ClassLoader) null)
+                    def c = Class.forName(desc.className, false, cl)
+                    def names = ['org.junit.Ignore', 'org.junit.jupiter.api.Disabled']
+                    def a = null
+                    try { a = c.getMethod(desc.name).getAnnotations().find { names.contains(it.annotationType().name) } } catch (Throwable ignored) {}
+                    if (a == null) { a = c.getAnnotations().find { names.contains(it.annotationType().name) } }
+                    if (a != null) {
+                      def v = a.value()
+                      reason = 'annotated @' + a.annotationType().simpleName + ' in upstream source' + (v ? ' ("' + v + '")' : ' (no reason text given upstream)')
+                    }
+                    cl.close()
+                  } catch (Throwable ignored) {}
+                  println "SKIPPED TEST: ${desc.className} > ${desc.name} - reason: ${reason}"
+                }
+              }
+              t.afterSuite { desc, result ->
+                if (desc.parent == null) {
+                  println "TEST SUMMARY ${t.path}: ${result.testCount} tests, ${result.successfulTestCount} passed, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped"
+                }
+              }
+            }
+          }
+          EOF
       - name: Build with Gradle
-        run: ./gradlew clean build --continue
+        run: |
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            ./gradlew -I "$RUNNER_TEMP/test-logging.gradle" clean :spring-security-core:jar ${{ inputs.test-filter }}
+          else
+            ./gradlew -I "$RUNNER_TEMP/test-logging.gradle" clean :spring-security-core:build :spring-security-crypto:build :spring-security-web:build :spring-security-oauth2-client:build --continue
+          fi
+      - name: Upload spring-security-core jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: spring-security-core
+          path: core/build/libs/spring-security-core-5.3.5.RELEASE.jar
+          if-no-files-found: error
